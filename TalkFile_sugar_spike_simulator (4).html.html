@@ -1,0 +1,1422 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>당류 계산기 & 가상 혈당 스파이크 시뮬레이터</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Font Awesome (for icons) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;700;800&display=swap');
+        body {
+            font-family: 'Pretendard', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        /* Pulse animation for sugar crash warning */
+        @keyframes custom-pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.02); opacity: 0.95; }
+        }
+        .pulse-warning {
+            animation: custom-pulse 2.2s infinite ease-in-out;
+        }
+        
+        /* Premium custom scrollbar for cross-browser consistency */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+            border-radius: 8px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 8px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        /* Prevent input number spinners from ruining layout on Chrome/Safari/Firefox */
+        input[type="number"]::-webkit-outer-spin-button,
+        input[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input[type="number"] {
+            -moz-appearance: textfield;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen antialiased selection:bg-rose-500/10 selection:text-rose-600">
+
+    <!-- Header -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm backdrop-blur-md bg-white/95">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <div class="flex items-center space-x-3">
+                <div class="bg-red-500 text-white p-2.5 rounded-2xl shadow-md shadow-red-100 flex items-center justify-center">
+                    <i class="fa-solid fa-droplet text-xl"></i>
+                </div>
+                <div>
+                    <h1 class="font-extrabold text-lg text-slate-900 leading-tight">글루코스 가이드 PRO</h1>
+                    <p class="text-xs text-slate-500 font-medium">개인화 캘린더 일지 & 연속 혈당 분석</p>
+                </div>
+            </div>
+            <span class="bg-red-50 text-red-600 text-xs font-bold px-3 py-1.5 rounded-full border border-red-100 flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-red-500 animate-ping"></span>
+                장기 혈당 보전 모드
+            </span>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+        
+        <!-- Top Status Bar & Continuous Danger Warning Banner -->
+        <div class="space-y-4">
+            <!-- 1. Real-time Date Banner -->
+            <div class="bg-white border border-slate-100 rounded-2xl p-4 flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm">
+                <div class="flex items-center gap-3">
+                    <div class="bg-slate-100 text-slate-700 w-10 h-10 rounded-xl flex items-center justify-center shrink-0">
+                        <i class="fa-regular fa-calendar-days text-lg"></i>
+                    </div>
+                    <div>
+                        <p class="text-xs text-slate-400 font-semibold">장기 관리를 위한 일일 측정 기록망</p>
+                        <h2 class="text-sm md:text-base font-bold text-slate-800" id="current-date-text">오늘은 2026년 7월 3일 금요일입니다</h2>
+                    </div>
+                </div>
+                
+                <!-- Date Picker & Utility to select what day we are logging/viewing -->
+                <div class="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                    <div class="flex items-center gap-1.5">
+                        <label for="history-date-picker" class="text-xs font-bold text-slate-500 whitespace-nowrap">분석 대상일:</label>
+                        <input type="date" id="history-date-picker" onchange="changeTargetDate(this.value)" class="px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 bg-white cursor-pointer">
+                    </div>
+                    <!-- Demo Helper Button -->
+                    <button onclick="injectDemoData()" class="bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs px-3 py-2 rounded-xl transition-all flex items-center gap-1">
+                        <i class="fa-solid fa-database text-amber-500"></i> 테스트 데이터 채우기
+                    </button>
+                </div>
+            </div>
+
+            <!-- 2. Multi-Day Danger Warning Alert -->
+            <div id="multi-day-danger-alert" class="hidden bg-gradient-to-r from-red-600 to-rose-600 text-white rounded-2xl p-5 shadow-lg relative overflow-hidden">
+                <div class="absolute -right-6 -bottom-6 opacity-10 text-7xl font-black select-none"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                <div class="flex items-start gap-4 relative z-10">
+                    <div class="bg-white/20 p-2.5 rounded-xl text-lg flex items-center justify-center shrink-0">
+                        <i class="fa-solid fa-triangle-exclamation text-white"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-extrabold text-sm md:text-base text-white">⚠️ 만성 대사 파괴 경고: 인슐린 저항성 적신호</h3>
+                        <p class="text-xs text-rose-100 mt-1.5 leading-relaxed font-semibold">
+                            분석 결과, 최근 수일간 연속으로 하루 권장 당류 상한선(50g)을 모두 초과하여 섭취하셨습니다. 
+                            이렇게 매일 지속되는 과당 유입은 췌장을 쉴 틈 없이 혹사시켜 <strong>'인슐린 저항성'</strong>을 유발하며, 내장지방 축적과 만성 대사 피로 상태로 직행하게 만듭니다. 
+                            <span class="underline decoration-white decoration-2 font-black">최소 다음 48시간 동안은 순수한 물만 섭취해 체내 당독소를 희석해 주세요!</span>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Intro Card -->
+        <section class="bg-gradient-to-r from-rose-500 to-orange-500 rounded-3xl p-6 md:p-8 text-white shadow-xl shadow-rose-100 relative overflow-hidden">
+            <div class="absolute -right-10 -bottom-10 opacity-10 text-9xl font-black select-none">SUGAR</div>
+            <div class="relative z-10 max-w-2xl">
+                <span class="bg-white/20 text-white text-xs font-bold px-3 py-1.5 rounded-full backdrop-blur-sm">보건학 가이드라인</span>
+                <h2 class="text-2xl md:text-3xl font-extrabold mt-3 leading-snug">무심코 마신 음료수 한 잔,<br>당신의 몸속은 지금 안전한가요?</h2>
+                <p class="mt-2 text-sm text-rose-100 leading-relaxed font-medium">
+                    세계보건기구(WHO)의 가공식품을 통한 가당류 하루 권장 섭취량은 <strong>50g 미만</strong>(총열량의 10% 미만)입니다. 
+                    우리가 다른 시간대에 마신 여러 음료가 하루 종일 내 혈당에 어떤 롤러코스터를 유발하는지 확인해 보세요.
+                </p>
+            </div>
+        </section>
+
+        <!-- Main Column Layout (Wider Desktop Grid Setup) -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            
+            <!-- LEFT COLUMN: Sugar Calculator & Visualizer -->
+            <section class="lg:col-span-5 space-y-6">
+                <!-- 1. Drink Selector & Custom Input -->
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+                    <div class="flex flex-col gap-1 mb-4">
+                        <h3 class="font-bold text-lg text-slate-900 flex items-center gap-2">
+                            <i class="fa-solid fa-wine-glass text-orange-500"></i>
+                            오늘 마신 음료 추가
+                        </h3>
+                        <p class="text-xs text-slate-400">시간을 정밀 설정하고 하단 음료를 누르거나 직접 추가하세요.</p>
+                    </div>
+
+                    <!-- Hour & Keyboard Minute Input for Intake -->
+                    <div class="bg-slate-50 border border-slate-150 rounded-2xl p-4 mb-4">
+                        <label class="block text-xs font-bold text-slate-600 mb-2 flex items-center gap-1.5">
+                            <i class="fa-regular fa-clock text-rose-500"></i>
+                            섭취 시간 정밀 설정
+                        </label>
+                        <div class="flex gap-2">
+                            <!-- Hour Selector -->
+                            <div class="flex-1 relative">
+                                <select id="intake-hour" class="w-full pl-3 pr-8 py-2.5 bg-white rounded-xl border border-slate-200 text-xs font-semibold appearance-none focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all cursor-pointer">
+                                    <option value="8">오전 08시</option>
+                                    <option value="9">오전 09시</option>
+                                    <option value="10">오전 10시</option>
+                                    <option value="11">오전 11시</option>
+                                    <option value="12" selected>오후 12시</option>
+                                    <option value="13">오후 01시</option>
+                                    <option value="14">오후 02시</option>
+                                    <option value="15">오후 03시</option>
+                                    <option value="16">오후 04시</option>
+                                    <option value="17">오후 05시</option>
+                                    <option value="18">오후 06시</option>
+                                    <option value="19">오후 07시</option>
+                                    <option value="20">오후 08시</option>
+                                    <option value="21">오후 09시</option>
+                                    <option value="22">오후 10시</option>
+                                    <option value="23">오후 11시</option>
+                                </select>
+                                <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 text-xs">
+                                    <i class="fa-solid fa-chevron-down"></i>
+                                </div>
+                            </div>
+                            <!-- Minute Input (Direct Keyboard Typing) -->
+                            <div class="flex-1 relative">
+                                <input type="number" id="intake-minute-input" min="0" max="59" value="0" placeholder="분 직접 입력" class="w-full pl-3 pr-8 py-2.5 bg-white rounded-xl border border-slate-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all">
+                                <span class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold pointer-events-none">분</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Quick Select Buttons -->
+                    <div class="grid grid-cols-2 gap-2 mb-4" id="preset-container">
+                        <!-- Presets generated by JS -->
+                    </div>
+
+                    <!-- Custom Intake Control -->
+                    <div class="border-t border-slate-100 pt-4 mt-4">
+                        <label class="block text-xs font-bold text-slate-500 mb-2">직접 추가하기</label>
+                        <div class="space-y-3">
+                            <input type="text" id="custom-name" placeholder="음료 이름 (예: 매실차)" class="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all">
+                            <div class="flex gap-2">
+                                <div class="relative flex-1">
+                                    <input type="number" id="custom-sugar" placeholder="당류" class="w-full pl-4 pr-8 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all">
+                                    <span class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold pointer-events-none">g</span>
+                                </div>
+                                <button onclick="addCustomDrink()" class="bg-slate-900 hover:bg-slate-800 text-white font-bold px-5 rounded-xl text-sm transition-all flex items-center justify-center gap-1.5 whitespace-nowrap">
+                                    <i class="fa-solid fa-plus"></i> 추가
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. Consumption List -->
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="font-bold text-slate-900 flex items-center gap-2">
+                            <i class="fa-solid fa-list-check text-slate-500"></i>
+                            <span id="list-date-title">기록 스케줄 (시간순)</span>
+                        </h3>
+                        <button onclick="clearAllDrinks()" class="text-xs text-slate-400 hover:text-slate-600 font-semibold transition-colors">
+                            <i class="fa-solid fa-rotate-left"></i> 전체 초기화
+                        </button>
+                    </div>
+                    <div id="selected-list" class="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                        <!-- Dynamic content -->
+                        <div class="text-center py-8 text-slate-400 text-sm">
+                            <i class="fa-solid fa-glass-water-droplet text-3xl mb-2 text-slate-200 block"></i>
+                            음료수를 선택하거나 추가해 주세요.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. Sugar Visualizer (Cube sugar representation) -->
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 overflow-hidden relative">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="font-bold text-slate-900 flex items-center gap-2">
+                            <i class="fa-solid fa-cubes text-amber-600"></i>
+                            당류 시각화 (각설탕 개수)
+                        </h3>
+                    </div>
+                    
+                    <div class="flex items-baseline gap-1 mb-4">
+                        <span class="text-4xl font-extrabold text-slate-900" id="total-sugar-display">0</span>
+                        <span class="text-lg font-bold text-slate-500">g</span>
+                        <span class="text-slate-300 mx-1">|</span>
+                        <span class="text-lg font-bold text-amber-600" id="sugar-cubes-count">각설탕 0개 분량</span>
+                    </div>
+
+                    <!-- WHO Gauge -->
+                    <div class="space-y-1.5 mb-6">
+                        <div class="flex justify-between text-xs font-bold">
+                            <span class="text-slate-400">WHO 가이드라인 대비</span>
+                            <span id="who-percentage" class="text-emerald-500">0%</span>
+                        </div>
+                        <div class="w-full bg-slate-100 h-3 rounded-full overflow-hidden flex">
+                            <div id="who-bar" class="bg-emerald-500 h-full transition-all duration-500 rounded-full" style="width: 0%"></div>
+                        </div>
+                        <div class="flex justify-between text-[10px] text-slate-400 font-semibold">
+                            <span>0g (안전)</span>
+                            <span class="text-red-500 font-bold">50g (WHO 하루 권장량 제한선)</span>
+                        </div>
+                    </div>
+
+                    <!-- Sugar Cubes Grid -->
+                    <div class="bg-slate-50 rounded-2xl p-4 border border-slate-100 min-h-[140px]">
+                        <p class="text-xs text-slate-400 font-semibold mb-3">※ 각설탕 1개 = 당류 약 3g 기준</p>
+                        <div id="cubes-grid" class="flex flex-wrap gap-2 justify-start items-center">
+                            <!-- Cubes will be rendered dynamically here -->
+                            <div class="w-full text-center text-slate-400 text-xs py-4">섭취한 당류를 채워보세요!</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- RIGHT COLUMN: Simulator & Dynamic Chart -->
+            <section class="lg:col-span-7 space-y-6">
+                <!-- 4. Spikes Simulator -->
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex flex-col">
+                    <div>
+                        <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+                            <div>
+                                <h3 class="font-bold text-lg text-slate-900 flex items-center gap-2">
+                                    <i class="fa-solid fa-chart-line text-rose-500"></i>
+                                    가상 혈당 스파이크 시뮬레이터 (동적 그래프)
+                                </h3>
+                                <p class="text-xs text-slate-500 mt-1">시간대별(08:00 ~ 24:00) 섭취 시차를 고려한 리얼타임 대사 곡선 시뮬레이션</p>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="startSimulation()" id="sim-btn" class="bg-rose-500 hover:bg-rose-600 text-white font-extrabold text-sm px-5 py-2.5 rounded-2xl shadow-lg shadow-rose-100 transition-all flex items-center gap-2">
+                                    <i class="fa-solid fa-play"></i> 마시기 시뮬레이션
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Graph Canvas Wrapper -->
+                        <div class="bg-slate-50 rounded-2xl p-4 border border-slate-100 relative h-[320px] flex items-center justify-center">
+                            <canvas id="spikeChart" class="w-full h-full"></canvas>
+                            
+                            <!-- Overlay Real-time alert during simulation -->
+                            <div id="warning-overlay" class="hidden absolute top-4 left-4 right-4 bg-red-500/95 text-white p-4 rounded-xl shadow-lg pulse-warning z-10 transition-all duration-300">
+                                <div class="flex items-start gap-3">
+                                    <div class="bg-white text-red-500 p-2 rounded-lg font-black text-lg shadow-sm">⚠️</div>
+                                    <div class="flex-1">
+                                        <h4 class="font-bold text-sm text-white" id="warning-title">🚨 혈당 스파이크 경고!</h4>
+                                        <p class="text-xs text-red-50 mt-1 font-medium leading-relaxed" id="warning-desc">
+                                            정상 범위를 넘어선 급격한 혈당 상승입니다. 췌장에 과부하가 걸려 과도한 인슐린이 분비되기 직전입니다!
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Initial Help Text -->
+                            <div id="chart-placeholder" class="absolute inset-0 bg-slate-900/5 backdrop-blur-[1px] rounded-2xl flex flex-col items-center justify-center text-center p-6 transition-all duration-300 z-10">
+                                <div class="w-14 h-14 rounded-full bg-white text-rose-500 flex items-center justify-center shadow-md mb-3 text-xl">
+                                    <i class="fa-solid fa-clock-rotate-left"></i>
+                                </div>
+                                <h4 class="font-bold text-slate-800">하루 시간대별 혈당 시뮬레이션</h4>
+                                <p class="text-xs text-slate-500 max-w-sm mt-1 leading-relaxed">
+                                    음료수를 각각 다른 시간에 배치하고 '마시기 시뮬레이션'을 구동해 보세요. 섭취 시차에 따라 꼬리를 무는 스파이크와 저혈당(크래쉬)의 실시간 연쇄 반응이 그려집니다.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Interactive Info Bar -->
+                    <div class="mt-6 border-t border-slate-100 pt-6 pb-2">
+                        <h4 class="font-bold text-slate-900 text-sm mb-3 flex items-center gap-2">
+                            <i class="fa-solid fa-graduation-cap text-indigo-500"></i>
+                            시차를 둔 다중 섭취가 더 무서운 이유:
+                        </h4>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100/50">
+                                <div class="flex gap-2 items-center text-indigo-700 font-bold text-xs mb-1">
+                                    <span class="w-2 h-2 rounded-full bg-indigo-500"></span>
+                                    피로와 단맛의 무한 루프
+                                </div>
+                                <p class="text-[11px] text-slate-600 leading-relaxed font-medium" id="dynamic-loop-analysis">
+                                    오늘 드신 음료수를 추가하시면 이 영역에 실제 섭취 시간 스케줄에 가해진 슈가 크래쉬 피로 악순환 무한 루프 시나리오가 실시간 생성됩니다.
+                                </p>
+                            </div>
+                            <div class="bg-amber-50/50 p-4 rounded-2xl border border-amber-100/50">
+                                <div class="flex gap-2 items-center text-amber-700 font-bold text-xs mb-1">
+                                    <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+                                    휴식 없는 췌장의 혹사
+                                </div>
+                                <p class="text-[11px] text-slate-600 leading-relaxed font-medium">
+                                    혈당이 정상화될 틈을 주지 않고 수시로 가당 음료를 찔러 넣으면, 췌장의 베타세포가 영구히 파괴되어 결국 젊은 당뇨 및 비만 대사 질환으로 직행하게 됩니다.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ✨ AI 임상 헬스 리포트 상담소 -->
+                <div class="bg-gradient-to-br from-indigo-900 to-slate-900 text-white rounded-3xl p-6 shadow-xl border border-indigo-950 relative overflow-hidden">
+                    <div class="absolute -right-8 -bottom-8 opacity-5 text-8xl font-black"><i class="fa-solid fa-brain"></i></div>
+                    <div class="flex flex-col gap-4">
+                        <div class="flex items-center justify-between gap-2 flex-wrap">
+                            <div class="flex items-center gap-2.5">
+                                <div class="bg-indigo-500/20 text-indigo-300 w-10 h-10 rounded-xl flex items-center justify-center">
+                                    <i class="fa-solid fa-wand-magic-sparkles text-lg text-indigo-300"></i>
+                                </div>
+                                <div>
+                                    <h3 class="font-extrabold text-sm md:text-base text-white">✨ AI 임상 헬스 리포트 상담소</h3>
+                                    <p class="text-[11px] text-indigo-200">생리학적 분석 모델과 대체 레시피 솔루션 실시간 피드백</p>
+                                </div>
+                            </div>
+                            <button onclick="fetchGeminiAdvice()" id="ai-btn" class="w-full sm:w-auto bg-indigo-500 hover:bg-indigo-600 text-white font-black text-xs px-4 py-2.5 rounded-xl shadow-md transition-all flex items-center justify-center gap-1.5 active:scale-95">
+                                <i class="fa-solid fa-sparkles"></i> ✨ 1:1 보건 솔루션 요청
+                            </button>
+                        </div>
+
+                        <!-- AI Response Container -->
+                        <div id="ai-response-box" class="bg-white/5 border border-white/10 rounded-2xl p-5 min-h-[140px] text-xs leading-relaxed overflow-y-auto max-h-[400px]">
+                            <div id="ai-placeholder-text" class="text-slate-400 text-center py-10">
+                                <i class="fa-solid fa-user-doctor text-4xl mb-3 block text-slate-500"></i>
+                                위의 "1:1 보건 솔루션 요청" 버튼을 클릭하시면, 오늘 마신 당류 섭취 스케줄과 시간 격차를 분석하여 대사 영향 예측 및 대체 레시피를 실시간으로 제시해 드립니다.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 5. Alternate & Healthcare Feedback (동적 보건학 정밀 피드백 적용) -->
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+                    <h3 class="font-bold text-lg text-slate-900 mb-2 flex items-center gap-2">
+                        <i class="fa-solid fa-heart-circle-check text-emerald-500"></i>
+                        습관을 바꾸는 올바른 식습관 제안 (대안 음료)
+                    </h3>
+                    <p class="text-xs text-slate-500 mb-4" id="alternative-subtitle">선택한 음료에 맞춰 몸에 가해지는 무리를 줄이는 천연 건강 대체 음료 가이드를 제공합니다.</p>
+
+                    <!-- 보건학 맞춤형 상태 조언 패널 -->
+                    <div id="status-advice-banner" class="mb-4 transition-all duration-300">
+                        <!-- JS 4단계 조건부 멘트 주입 지점 -->
+                    </div>
+
+                    <!-- 동적 매칭 대안 음료 피드백 리스트 (가로 격자 정렬 시스템 도입) -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="alternative-list-container">
+                        <!-- JS를 통해 선택된 음료에 매칭되는 대안 리스트가 동적으로 렌더링됩니다. -->
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-slate-900 text-slate-400 py-10 mt-16 border-t border-slate-800">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-3">
+            <p class="text-xs font-semibold tracking-wider text-slate-500 uppercase">보건 영양 학술 데이터 기반 안내</p>
+            <p class="text-[11px] leading-relaxed max-w-2xl mx-auto text-slate-500">
+                본 시뮬레이터에 표시되는 혈당 수치(mg/dL)와 그래프 경로는 일반적인 액상과당 음료를 섭취했을 때의 평균적인 대사 반응을 모사한 수학적 가이드 모델입니다. 개개인의 인슐린 민감도, 기저 건강 상태, 활동량 등에 따라 실제 혈당 반응은 차이가 있을 수 있습니다.
+            </p>
+            <div class="pt-4 text-slate-600 text-xs">
+                &copy; 2026 글루코스 가이드. All Rights Reserved.
+            </div>
+        </div>
+    </footer>
+
+    <!-- Script Block -->
+    <script>
+        // Preset drinks information
+        const PRESETS = [
+            { name: "펩시콜라 (355ml)", sugar: 38, emoji: "🥤" },
+            { name: "칠성사이다 (355ml)", sugar: 33, emoji: "🥤" },
+            { name: "델몬트 스퀴시 오렌지 (240ml)", sugar: 26, emoji: "🍊" },
+            { name: "델몬트 스퀴시 사과 (240ml)", sugar: 27, emoji: "🍎" },
+            { name: "델몬트 스퀴시 포도 (240ml)", sugar: 29, emoji: "🍇" },
+            { name: "게토레이 (240ml)", sugar: 14, emoji: "💧" },
+            { name: "메가커피 딸기라떼", sugar: 41, emoji: "🍓" },
+            { name: "메가커피 초코라떼", sugar: 45, emoji: "☕" },
+            { name: "몬스터 에너지 (355ml)", sugar: 41, emoji: "⚡" },
+            { name: "핫식스 더킹 (330ml)", sugar: 38, emoji: "⚡" }
+        ];
+
+        // 동적 대안 음료 맵 (선택 음료명 키워드 매칭용)
+        const ALTERNATIVE_MAP = {
+            "콜라": {
+                original: "펩시콜라",
+                originalSugar: 38,
+                alternative: "레몬 인퓨즈 워터",
+                altSugar: 0,
+                desc: "인공감미료조차 배제한 순수 레몬수는 체내 미각 수용체를 정상화하여 단맛 중독 탈출을 돕고 혈당 수치를 완벽히 평탄하게 유지합니다.",
+                actionName: "레몬 인퓨즈 워터"
+            },
+            "사이다": {
+                original: "칠성사이다",
+                originalSugar: 33,
+                alternative: "플레인 탄산수",
+                altSugar: 0,
+                desc: "톡 쏘는 청량감은 원하시되 혈당 충격에서 완전히 벗어나기 위해 무향 무설탕 탄산수를 강력 추천합니다. 췌장을 안정시킵니다.",
+                actionName: "플레인 탄산수"
+            },
+            "델몬트": {
+                original: "농축 과일 주스",
+                originalSugar: 27,
+                alternative: "유기농 보리말차",
+                altSugar: 0,
+                desc: "농축 주스의 액상과당은 장내 흡수가 콜라보다 빠릅니다. 가공 주스 대신 은은한 보리말차를 마시면 인슐린 민감도가 개선됩니다.",
+                actionName: "유기농 보리말차"
+            },
+            "라떼": {
+                original: "메가 딸기라떼",
+                originalSugar: 41,
+                alternative: "무설탕 아몬드 브리즈",
+                altSugar: 1,
+                desc: "라떼의 액상 유당과 정제 시럽 결합은 지방 축적의 지름길입니다. 언스위트 식물성 밀크나 우려낸 차로 입안을 달래보세요.",
+                actionName: "아몬드 브리즈"
+            },
+            "초코": {
+                original: "메가 초코라떼",
+                originalSugar: 45,
+                alternative: "유기농 보리말차",
+                altSugar: 0,
+                desc: "농축 가공 시럽이 들어간 음료 대신 은은한 유기농 차음료를 선택하면 인슐린 자극을 최소화해 대사 증후군 및 호르몬 불균형을 전면 예방할 수 있습니다.",
+                actionName: "유기농 보리말차"
+            },
+            "에너지": {
+                original: "고카페인 에너지드링크",
+                originalSugar: 41,
+                alternative: "천연 레몬 루이보스티",
+                altSugar: 0,
+                desc: "카페인과 설탕이 결합하면 아드레날린 폭증으로 인해 역설적으로 더 심한 만성 피로가 유발됩니다. 항산화가 깃든 루이보스티로 회복해 보세요.",
+                actionName: "레몬 루이보스티"
+            },
+            "핫식스": {
+                original: "고카페인 핫식스 더킹",
+                originalSugar: 38,
+                alternative: "천연 레몬 루이보스티",
+                altSugar: 0,
+                desc: "카페인과 설탕이 결합하면 아드레날린 폭증으로 인해 역설적으로 더 심한 만성 피로가 유발됩니다. 항산화가 깃든 루이보스티로 회복해 보세요.",
+                actionName: "레몬 루이보스티"
+            },
+            "게토레이": {
+                original: "전해질 게토레이",
+                originalSugar: 14,
+                alternative: "천연 코코넛 워터",
+                altSugar: 5,
+                desc: "땀을 흘린 후 빠른 전해질 보충이 필요할 때는 정제 과당이 가득한 이온음료 대신, 칼륨과 천연 전해질이 풍부하며 칼로리가 매우 낮은 자연산 코코넛 워터를 권장합니다.",
+                actionName: "코코넛 워터"
+            }
+        };
+
+        const DEFAULT_ALTERNATIVES = [
+            {
+                original: "펩시콜라",
+                originalSugar: 38,
+                alternative: "레몬 인퓨즈 워터",
+                altSugar: 0,
+                desc: "인공감미료조차 배제한 순수 레몬수는 체내 미각 수용체를 정상화하여 단맛 중독 탈출을 돕고 혈당 수치를 완벽히 평탄하게 유지합니다.",
+                actionName: "레몬 인퓨즈 워터"
+            },
+            {
+                original: "델몬트 스퀴시 오렌지",
+                originalSugar: 26,
+                alternative: "유기농 보리말차",
+                altSugar: 0,
+                desc: "농축 가공 주스 대신 은은한 유기농 차음료를 선택하면 인슐린 자극을 최소화해 대사 증후군 및 호르몬 불균형을 전면 예방할 수 있습니다.",
+                actionName: "유기농 보리말차"
+            }
+        ];
+
+        // State Database (Stored daily records)
+        let dailyDatabase = {};
+        let currentTargetDate = "2026-07-03"; // Default initial target date
+
+        let spikeChart = null;
+        let simInterval = null;
+        let isSimulating = false;
+
+        const TIME_LABELS = [
+            "08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", 
+            "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00", "23:00", "24:00"
+        ];
+
+        // On Load Initializer
+        window.onload = function() {
+            // Load DB from LocalStorage
+            loadFromLocalStorage();
+
+            // Set current date input default
+            const picker = document.getElementById('history-date-picker');
+            picker.value = currentTargetDate;
+
+            updateHeaderDateDisplay(currentTargetDate);
+            renderPresets();
+            updateIntakeUI();
+            initChart();
+            checkMultiDayDanger();
+        };
+
+        // LocalStorage loading/saving helpers
+        function saveToLocalStorage() {
+            localStorage.setItem('sugar_tracker_db_v3', JSON.stringify(dailyDatabase));
+        }
+
+        function loadFromLocalStorage() {
+            const saved = localStorage.getItem('sugar_tracker_db_v3');
+            if (saved) {
+                try {
+                    dailyDatabase = JSON.parse(saved);
+                } catch(e) {
+                    dailyDatabase = {};
+                }
+            } else {
+                dailyDatabase = {};
+                saveToLocalStorage();
+            }
+        }
+
+        // Demo data injector
+        function injectDemoData() {
+            dailyDatabase["2026-07-01"] = [
+                { id: "demo-1", name: "메가커피 초코라떼", sugar: 45, hour: 11, minute: 30 },
+                { id: "demo-2", name: "펩시콜라 (355ml)", sugar: 38, hour: 15, minute: 0 }
+            ];
+            dailyDatabase["2026-07-02"] = [
+                { id: "demo-3", name: "메가커피 딸기라떼", sugar: 41, hour: 10, minute: 15 },
+                { id: "demo-4", name: "몬스터 에너지 (355ml)", sugar: 41, hour: 16, minute: 40 }
+            ];
+            saveToLocalStorage();
+            checkMultiDayDanger();
+            updateIntakeUI();
+            showSimpleToast("테스트용 과거 2일치 초과 데이터(7/1, 7/2)가 채워졌습니다! 오늘 날짜(7/3)에 50g을 넘게 채우면 연속 경고 배너가 작동합니다.");
+        }
+
+        // Header Date String Builder
+        function updateHeaderDateDisplay(dateStr) {
+            const dateObj = new Date(dateStr);
+            const daysKOR = ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"];
+            const formatted = `오늘은 ${dateObj.getFullYear()}년 ${dateObj.getMonth() + 1}월 ${dateObj.getDate()}일 ${daysKOR[dateObj.getDay()]}입니다`;
+            document.getElementById('current-date-text').innerText = formatted;
+            document.getElementById('list-date-title').innerText = `${dateObj.getMonth() + 1}/${dateObj.getDate()} 기록 스케줄`;
+        }
+
+        // Date Picker Change Trigger
+        function changeTargetDate(val) {
+            if (!val) return;
+            currentTargetDate = val;
+            updateHeaderDateDisplay(currentTargetDate);
+
+            if (isSimulating) {
+                stopSimulation();
+            }
+            updateIntakeUI();
+            initChart();
+            checkMultiDayDanger();
+            
+            // Clear AI text on date change
+            document.getElementById('ai-response-box').innerHTML = `
+                <div id="ai-placeholder-text" class="text-slate-400 text-center py-10">
+                    <i class="fa-solid fa-user-doctor text-4xl mb-3 block text-slate-500"></i>
+                    위의 "1:1 보건 솔루션 요청" 버튼을 클릭하시면, 오늘 마신 당류 섭취 스케줄과 시간 격차를 분석하여 대사 영향 예측 및 대체 레시피를 실시간으로 제시해 드립니다.
+                </div>
+            `;
+        }
+
+        // Check recent consecutive days sugar overload danger
+        function checkMultiDayDanger() {
+            const dangerAlertEl = document.getElementById('multi-day-danger-alert');
+            const loggedDates = Object.keys(dailyDatabase).filter(key => dailyDatabase[key] && dailyDatabase[key].length > 0);
+            
+            if (loggedDates.length < 3) {
+                dangerAlertEl.classList.add('hidden');
+                return;
+            }
+
+            const targetDateObj = new Date(currentTargetDate);
+            const dayMillis = 24 * 60 * 60 * 1000;
+            
+            let consecutiveHighCount = 0;
+            let loggedDaysCount = 0;
+
+            for (let i = 0; i < 3; i++) {
+                const checkDate = new Date(targetDateObj.getTime() - (i * dayMillis));
+                const yyyy = checkDate.getFullYear();
+                const mm = String(checkDate.getMonth() + 1).padStart(2, '0');
+                const dd = String(checkDate.getDate()).padStart(2, '0');
+                const key = `${yyyy}-${mm}-${dd}`;
+
+                const list = dailyDatabase[key] || [];
+                if (list.length > 0) {
+                    loggedDaysCount++;
+                    const totalSugar = list.reduce((sum, d) => sum + d.sugar, 0);
+                    if (totalSugar >= 50) {
+                        consecutiveHighCount++;
+                    }
+                }
+            }
+
+            if (loggedDaysCount >= 3 && consecutiveHighCount >= 3) {
+                dangerAlertEl.classList.remove('hidden');
+            } else {
+                dangerAlertEl.classList.add('hidden');
+            }
+        }
+
+        // Render Quick Select Presets
+        function renderPresets() {
+            const container = document.getElementById('preset-container');
+            container.innerHTML = PRESETS.map((p, index) => `
+                <button onclick="addPresetDrink(${index})" class="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl p-3 text-left transition-all hover:scale-[1.02] active:scale-[0.98] flex items-center gap-3">
+                    <span class="text-xl">${p.emoji}</span>
+                    <div class="flex-1 min-w-0">
+                        <div class="text-xs font-bold text-slate-800 truncate">${p.name}</div>
+                        <div class="text-[10px] font-bold text-orange-500">${p.sugar}g</div>
+                    </div>
+                </button>
+            `).join('');
+        }
+
+        // Add a preset drink to list
+        function addPresetDrink(index) {
+            const preset = PRESETS[index];
+            const currentSelectedHour = parseInt(document.getElementById('intake-hour').value);
+            const minInputVal = parseInt(document.getElementById('intake-minute-input').value);
+            const currentSelectedMinute = isNaN(minInputVal) ? 0 : Math.max(0, Math.min(59, minInputVal));
+
+            addDrinkToList(preset.name, preset.sugar, currentSelectedHour, currentSelectedMinute);
+        }
+
+        // Add custom input drink
+        function addCustomDrink() {
+            const nameInput = document.getElementById('custom-name');
+            const sugarInput = document.getElementById('custom-sugar');
+            const currentSelectedHour = parseInt(document.getElementById('intake-hour').value);
+            const minInputVal = parseInt(document.getElementById('intake-minute-input').value);
+            const currentSelectedMinute = isNaN(minInputVal) ? 0 : Math.max(0, Math.min(59, minInputVal));
+
+            const name = nameInput.value.trim() || "직접 추가 음료";
+            const sugar = parseFloat(sugarInput.value);
+
+            if (isNaN(sugar) || sugar < 0) {
+                showSimpleToast("올바른 당류 양(g)을 입력해주세요.");
+                return;
+            }
+
+            addDrinkToList(name, sugar, currentSelectedHour, currentSelectedMinute);
+            nameInput.value = "";
+            sugarInput.value = "";
+        }
+
+        // Universal drink adder
+        function addDrinkToList(name, sugar, hour, minute) {
+            if (!dailyDatabase[currentTargetDate]) {
+                dailyDatabase[currentTargetDate] = [];
+            }
+
+            const currentDayList = dailyDatabase[currentTargetDate];
+
+            if (currentDayList.length >= 10) {
+                showSimpleToast("하루 기록 한도를 초과했습니다 (최대 10개).");
+                return;
+            }
+
+            currentDayList.push({
+                id: Date.now() + Math.random().toString(36).substr(2, 5),
+                name: name,
+                sugar: sugar,
+                hour: hour,
+                minute: minute
+            });
+
+            // 시간+분 정렬
+            currentDayList.sort((a, b) => (a.hour * 60 + a.minute) - (b.hour * 60 + b.minute));
+
+            saveToLocalStorage();
+            updateIntakeUI();
+            
+            document.getElementById('chart-placeholder').classList.remove('hidden');
+            if (isSimulating) {
+                stopSimulation();
+            }
+            initChart();
+            checkMultiDayDanger();
+        }
+
+        // Delete a specific drink
+        function deleteDrink(id) {
+            if (dailyDatabase[currentTargetDate]) {
+                dailyDatabase[currentTargetDate] = dailyDatabase[currentTargetDate].filter(d => d.id !== id);
+                saveToLocalStorage();
+            }
+            updateIntakeUI();
+            if (isSimulating) {
+                stopSimulation();
+            }
+            initChart();
+            checkMultiDayDanger();
+        }
+
+        // Clear all list
+        function clearAllDrinks() {
+            dailyDatabase[currentTargetDate] = [];
+            saveToLocalStorage();
+            updateIntakeUI();
+            if (isSimulating) {
+                stopSimulation();
+            }
+            initChart();
+            checkMultiDayDanger();
+        }
+
+        // Trigger alternative button action
+        function applyHealthyAlternative(name, sugar) {
+            const currentSelectedHour = parseInt(document.getElementById('intake-hour').value);
+            const minInputVal = parseInt(document.getElementById('intake-minute-input').value);
+            const currentSelectedMinute = isNaN(minInputVal) ? 0 : Math.max(0, Math.min(59, minInputVal));
+
+            dailyDatabase[currentTargetDate] = [{
+                id: "alt-drink",
+                name: name,
+                sugar: sugar,
+                hour: currentSelectedHour,
+                minute: currentSelectedMinute
+            }];
+            saveToLocalStorage();
+            updateIntakeUI();
+            startSimulation();
+            checkMultiDayDanger();
+        }
+
+        // 섭취 시간차 연쇄 악순환 피드백 분석 동적 생성기 (시럽 커피 하드코딩 대체)
+        function updateDynamicLoopAnalysis(currentDayList) {
+            const pEl = document.getElementById('dynamic-loop-analysis');
+            if (!pEl) return;
+
+            if (currentDayList.length === 0) {
+                pEl.innerHTML = `오늘 마신 음료수를 추가하시면, 해당 시간대의 실제 섭취 타임라인에 가해지는 생리학적 <strong>슈가 크래쉬 피로 악순환 무한 루프</strong> 시나리오가 실시간 생성됩니다.`;
+                return;
+            }
+
+            if (currentDayList.length === 1) {
+                const drink = currentDayList[0];
+                const crashHour = (drink.hour + 2) % 24;
+                const crashHourStr = crashHour < 12 ? `오전 0${crashHour}:00` : (crashHour === 12 ? `오후 12:00` : `오후 0${crashHour - 12}:00`);
+                const drinkTimeStr = drink.hour < 12 ? `오전 ${drink.hour}시 ${drink.minute}분` : (drink.hour === 12 ? `오후 12시 ${drink.minute}분` : `오후 ${drink.hour - 12}시 ${drink.minute}분`);
+                const cleanName = drink.name.split(" ")[0];
+                
+                pEl.innerHTML = `<strong>${drinkTimeStr}</strong>에 섭취하신 <strong>${cleanName}</strong>의 액상 포도당이 가치 회수되며 혈당이 폭락하는 <strong>${crashHourStr} 무렵(슈가 크래쉬)</strong>이 오면, 극심한 무기력증 and 식곤증이 찾아와 뇌가 참지 못하고 또 다른 단맛 음료를 갈망하게 만듭니다.`;
+            } else {
+                // 2개 이상일 때 인접 섭취 시차 패턴 도출
+                const first = currentDayList[0];
+                const second = currentDayList[1];
+                const firstTimeStr = first.hour < 12 ? `오전 ${first.hour}시` : (first.hour === 12 ? `오후 12시` : `오후 ${first.hour - 12}시`);
+                const secondTimeStr = second.hour < 12 ? `오전 ${second.hour}시` : (second.hour === 12 ? `오후 12시` : `오후 ${second.hour - 12}시`);
+                
+                const gap = (second.hour + second.minute/60) - (first.hour + first.minute/60);
+                const firstClean = first.name.split(" ")[0];
+                const secondClean = second.name.split(" ")[0];
+                
+                if (gap > 0 && gap <= 3) {
+                    pEl.innerHTML = `<strong>${firstTimeStr}</strong>에 마신 <strong>${firstClean}</strong>으로 혈당 저하 크래쉬 피로가 절정에 달하는 <strong>${secondTimeStr}</strong>경에 이를 버티지 못하고 다시 <strong>${secondClean}</strong>을 들이켜, 인슐린 폭풍이 무한 반복되는 전형적인 <strong>'당 중독 회전목마' 루프</strong>에 갇혔습니다.`;
+                } else {
+                    pEl.innerHTML = `<strong>${firstTimeStr}</strong>에 <strong>${firstClean}</strong>을 마시고 정상으로 수렴하기도 전에, <strong>${secondTimeStr}</strong>에 다시 <strong>${secondClean}</strong>의 정제당을 밀어 넣어 췌장에 쉴 틈 없는 혈당 롤러코스터 충격을 장기적으로 가하고 있습니다.`;
+                }
+            }
+        }
+
+        // Render dynamic alternatives list (다운로드 시 오작동하는 중첩 템플릿 리터럴 문법을 안전한 조건 제어문으로 분리 완료)
+        function renderDynamicAlternatives(totalSugar, currentDayList) {
+            const container = document.getElementById('alternative-list-container');
+            const warningEl = document.getElementById('status-advice-banner');
+            const subtitleEl = document.getElementById('alternative-subtitle');
+
+            // 1. 네 단계별 동적 맞춤 상태 조언 설정
+            let adviceHTML = '';
+            let hideAlternativeButtons = false;
+            
+            if (currentDayList.length === 0) {
+                adviceHTML = `
+                    <div class="flex items-start gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-200 text-slate-700">
+                        <span class="text-xl">✨</span>
+                        <div>
+                            <h4 class="font-black text-sm text-slate-900">당류 조절 여정을 시작해 보세요!</h4>
+                            <p class="text-xs text-slate-600 mt-1 leading-relaxed">
+                                오늘 드신 가공 음료를 좌측 목록에서 클릭하여 추가하시면, 실시간 섭취 분석과 함께 맞춤형 보건 제언을 드립니다.
+                            </p>
+                        </div>
+                    </div>
+                `;
+                subtitleEl.innerText = "선택한 음료에 맞춰 몸에 가해지는 무리를 줄이는 천연 건강 대체 음료 가이드를 제공합니다.";
+            } else if (totalSugar < 30) {
+                hideAlternativeButtons = true;
+                adviceHTML = `
+                    <div class="flex items-start gap-3 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800">
+                        <span class="text-xl">💚</span>
+                        <div>
+                            <h4 class="font-black text-sm text-emerald-900">완벽합니다! 당류 조절을 아주 잘 지키고 계시네요.</h4>
+                            <p class="text-xs text-emerald-700 mt-1 leading-relaxed font-semibold">
+                                현재 당류 섭취량이 안전 제한선 내에서 매우 훌륭히 조절되고 있습니다. 오늘 하루는 단맛 음료 대신 이 상태를 기분 좋게 유지하시고, 수분 보충은 순수 물이나 허브티로 이어가 보세요!
+                            </p>
+                        </div>
+                    </div>
+                `;
+                subtitleEl.innerText = "수준급의 당 통제 상태입니다! 아래 천연 건강 대안을 확인해 보세요.";
+            } else if (totalSugar < 50) {
+                adviceHTML = `
+                    <div class="flex items-start gap-3 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800">
+                        <span class="text-xl">💛</span>
+                        <div>
+                            <h4 class="font-black text-sm text-amber-900">주의가 필요합니다! 권장 제한선 근접 중입니다.</h4>
+                            <p class="text-xs text-amber-700 mt-1 leading-relaxed font-semibold">
+                                아직 WHO 기준 하루 권장 제한선(50g) 밑에 있지만 경계 태세가 필요합니다. 여기서 가공 음료를 한 잔만 더 추가해도 즉시 초과 범위로 진입하오니, 더 이상의 정제당 섭취는 잠시 쉬어 가시기 바랍니다.
+                            </p>
+                        </div>
+                    </div>
+                `;
+                subtitleEl.innerText = "안정권 내 마지막 경계선입니다. 무리 없는 천연 음료 대안을 고려해 보세요.";
+            } else if (totalSugar < 80 && currentDayList.length < 3) {
+                adviceHTML = `
+                    <div class="flex items-start gap-3 p-4 rounded-2xl bg-orange-50 border border-orange-200 text-orange-800">
+                        <span class="text-xl">🚨</span>
+                        <div>
+                            <h4 class="font-black text-sm text-orange-900">권장 섭취 제한 초과! 추가 당류 섭취를 중단하세요.</h4>
+                            <p class="text-xs text-orange-700 mt-1 leading-relaxed font-semibold">
+                                세계보건기구(WHO) 기준 하루 권장량 제한선(50g)을 초과했습니다. 신체가 과부하 상태의 당분을 분해하느라 인슐린 분비에 피로를 느끼고 있을 것입니다. 지금부터 가당 음료 유입을 전면 차단하고 가벼운 산책 등으로 당을 소모해 주는 것이 좋습니다.
+                            </p>
+                        </div>
+                    </div>
+                `;
+                subtitleEl.innerText = "🚨 1차 경고: 신체가 과도한 정제당을 분해하느라 지치기 시작했습니다.";
+            } else {
+                adviceHTML = `
+                    <div class="flex items-start gap-3 p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 animate-pulse">
+                        <span class="text-xl">⚠️</span>
+                        <div>
+                            <h4 class="font-black text-sm text-red-900">심각한 수준의 당류 폭탄! 지금 즉시 섭취를 멈추세요!</h4>
+                            <p class="text-xs text-red-700 mt-1 leading-relaxed font-semibold">
+                                기저 신체 호르몬 균형을 파괴할 수 있는 극도의 과당 축적 상태입니다. 대체당이나 제로 음료 조차 현재는 대안이 될 수 없으며, 오직 <strong>순수한 생수(물)</strong>를 많이 마셔 체내에 잔류하는 혈중 포도당 농도를 희석시키고 췌장을 보호해야 하는 최우선 치료 비상 지점입니다!
+                            </p>
+                        </div>
+                    </div>
+                `;
+                subtitleEl.innerText = "🚨🚨 위험: 췌장 과부하 및 혈당 급락이 유발될 수 있는 대단히 불안정한 상태입니다.";
+            }
+
+            warningEl.innerHTML = adviceHTML;
+
+            // 2. 동적 매칭 대안 배열 추출
+            let alternativesToRender = [];
+
+            if (currentDayList.length === 0) {
+                alternativesToRender = [...DEFAULT_ALTERNATIVES];
+            } else {
+                const addedKeys = new Set();
+                currentDayList.forEach(drink => {
+                    let matched = false;
+                    for (const key in ALTERNATIVE_MAP) {
+                        if (drink.name.includes(key)) {
+                            if (!addedKeys.has(key)) {
+                                alternativesToRender.push({
+                                    original: drink.name.split(" ")[0],
+                                    originalSugar: drink.sugar,
+                                    alternative: ALTERNATIVE_MAP[key].alternative,
+                                    altSugar: ALTERNATIVE_MAP[key].altSugar,
+                                    desc: ALTERNATIVE_MAP[key].desc,
+                                    actionName: ALTERNATIVE_MAP[key].actionName
+                                });
+                                addedKeys.add(key);
+                            }
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched && !addedKeys.has('custom-fallback')) {
+                        alternativesToRender.push({
+                            original: drink.name,
+                            originalSugar: drink.sugar,
+                            alternative: "순수 허브 미네랄 워터",
+                            altSugar: 0,
+                            desc: "직접 설계하신 가공 음료 대신, 보리와 옥수수수염을 직접 우린 전통 무당 티백을 이용해 건강하게 전해질을 회복하세요.",
+                            actionName: "허브 미네랄 워터"
+                        });
+                        addedKeys.add('custom-fallback');
+                    }
+                });
+            }
+
+            // 3. HTML 드로잉 (가로 격자 정렬 및 글자 늘어남/퍼짐 방지형 모듈 디자인 적용)
+            const listCardsHTML = alternativesToRender.map(item => {
+                // 완벽 상태일 때와 아닐 때의 상호작용 영역 분할
+                let actionArea = '';
+                if (hideAlternativeButtons) {
+                    actionArea = `
+                        <div class="w-full text-center bg-emerald-100/70 border border-emerald-200 text-emerald-800 font-extrabold text-xs px-3 py-2.5 rounded-xl flex items-center justify-center gap-1.5 whitespace-nowrap">
+                            <i class="fa-solid fa-circle-check"></i> 추천 천연 대안
+                        </div>
+                    `;
+                } else {
+                    actionArea = `
+                        <button onclick="applyHealthyAlternative('${item.actionName}', ${item.altSugar})" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs px-4 py-3 rounded-xl transition-colors whitespace-nowrap flex-shrink-0">
+                            이 대안으로 마셔보기
+                        </button>
+                    `;
+                }
+
+                return `
+                    <div class="flex flex-col justify-between p-5 rounded-2xl border border-slate-100 bg-emerald-50/20 gap-3.5 transition-all hover:border-emerald-200 h-full shadow-sm hover:shadow-md bg-white">
+                        <div class="flex items-center justify-between w-full border-b border-emerald-100 pb-2.5">
+                            <div class="text-center flex-1">
+                                <span class="text-[9px] font-bold text-red-500 bg-red-50 px-2 py-0.5 rounded-full border border-red-100 block mb-1">기존 선택</span>
+                                <span class="text-xs font-extrabold text-slate-700 block break-all leading-tight">${item.original}</span>
+                                <span class="text-[10px] text-slate-400 font-medium">(${item.originalSugar}g)</span>
+                            </div>
+                            <div class="text-slate-300 flex-shrink-0 px-2"><i class="fa-solid fa-circle-right text-lg"></i></div>
+                            <div class="text-center flex-1">
+                                <span class="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100 block mb-1">천연 대안</span>
+                                <span class="text-xs font-extrabold text-slate-700 block break-all leading-tight">${item.alternative}</span>
+                                <span class="text-[10px] text-emerald-500 font-bold">(${item.altSugar}g)</span>
+                            </div>
+                        </div>
+                        <div class="text-left flex-1 py-1">
+                            <p class="text-xs text-slate-600 leading-relaxed font-semibold text-justify">
+                                "${item.desc}"
+                            </p>
+                        </div>
+                        <div class="w-full mt-2">
+                            ${actionArea}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            container.innerHTML = listCardsHTML;
+        }
+
+        // Update calculations, list elements, gauge and sugar cubes graphics
+        function updateIntakeUI() {
+            const listEl = document.getElementById('selected-list');
+            const totalSugarDisplay = document.getElementById('total-sugar-display');
+            const sugarCubesCount = document.getElementById('sugar-cubes-count');
+            const cubesGrid = document.getElementById('cubes-grid');
+            const whoPercentage = document.getElementById('who-percentage');
+            const whoBar = document.getElementById('who-bar');
+
+            const currentDayList = dailyDatabase[currentTargetDate] || [];
+
+            if (currentDayList.length === 0) {
+                listEl.innerHTML = `
+                    <div class="text-center py-8 text-slate-400 text-sm">
+                        <i class="fa-solid fa-glass-water-droplet text-3xl mb-2 text-slate-200 block"></i>
+                        해당 날짜에 기록된 음료수가 없습니다. 추가해 보세요!
+                    </div>
+                `;
+                totalSugarDisplay.innerText = "0";
+                sugarCubesCount.innerText = "각설탕 0개 분량";
+                cubesGrid.innerHTML = `<div class="w-full text-center text-slate-400 text-xs py-4">섭취한 당류를 채워보세요!</div>`;
+                whoPercentage.innerText = "0%";
+                whoBar.style.width = "0%";
+                whoBar.className = "bg-emerald-500 h-full transition-all duration-500 rounded-full";
+                
+                renderDynamicAlternatives(0, currentDayList);
+                updateDynamicLoopAnalysis(currentDayList); // 스케줄 변화 시 피로 악순환 루프 스토리 동적 매칭
+                return;
+            }
+
+            // Formatting helper for rendering
+            function fetchFormattedTimeText(hour, min) {
+                const ampm = hour < 12 ? "오전" : "오후";
+                const displayHour = hour > 12 ? hour - 12 : (hour === 0 ? 12 : hour);
+                const displayHourStr = displayHour < 10 ? `0${displayHour}` : displayHour.toString();
+                const displayMinuteStr = min < 10 ? `0${min}` : min.toString();
+                return `${ampm} ${displayHourStr}:${displayMinuteStr}`;
+            }
+
+            // Render schedule
+            listEl.innerHTML = currentDayList.map(d => `
+                <div class="flex items-center justify-between bg-slate-50 hover:bg-slate-100 p-3 rounded-xl border border-slate-150 transition-all">
+                    <div class="flex items-center gap-2 min-w-0">
+                        <span class="bg-rose-100 text-rose-600 font-extrabold text-[10px] px-2 py-0.5 rounded-md flex-shrink-0">${fetchFormattedTimeText(d.hour, d.minute)}</span>
+                        <span class="text-xs font-bold text-slate-700 truncate max-w-[150px]">${d.name}</span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs font-extrabold text-orange-600">${d.sugar}g</span>
+                        <button onclick="deleteDrink('${d.id}')" class="text-slate-300 hover:text-red-500 text-xs transition-colors">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+
+            // Calculate totals
+            const totalSugar = currentDayList.reduce((sum, d) => sum + d.sugar, 0);
+            totalSugarDisplay.innerText = totalSugar.toFixed(1);
+
+            // Compute equivalent cubes
+            const cubeCount = Math.round(totalSugar / 3);
+            sugarCubesCount.innerText = `각설탕 ${cubeCount}개 분량`;
+
+            // Draw cubes
+            let cubesHTML = "";
+            if (cubeCount === 0) {
+                cubesHTML = `<div class="w-full text-center text-slate-400 text-xs py-4">총량이 매우 미미하여 각설탕 단위 미만입니다.</div>`;
+            } else {
+                for (let i = 0; i < cubeCount; i++) {
+                    cubesHTML += `
+                        <div class="w-10 h-10 bg-white border-2 border-slate-200 rounded-xl shadow-sm flex flex-col items-center justify-center relative group hover:border-orange-300 transition-colors" title="각설탕 ${i+1}">
+                            <i class="fa-solid fa-cube text-slate-200 text-sm group-hover:text-orange-200 transition-colors"></i>
+                            <span class="text-[8px] text-slate-400 font-bold leading-none mt-0.5">${i+1}</span>
+                        </div>
+                    `;
+                }
+            }
+            cubesGrid.innerHTML = cubesHTML;
+
+            // Gauge calculations
+            const pct = Math.min((totalSugar / 50) * 100, 100);
+            whoPercentage.innerText = `${pct.toFixed(0)}%`;
+            whoBar.style.width = `${pct}%`;
+
+            // Dynamic color shift depending on limit
+            if (totalSugar > 50) {
+                whoBar.className = "bg-red-500 h-full transition-all duration-500 rounded-full";
+                whoPercentage.className = "text-red-500 font-bold";
+            } else if (totalSugar > 30) {
+                whoBar.className = "bg-amber-500 h-full transition-all duration-500 rounded-full";
+                whoPercentage.className = "text-amber-500 font-bold";
+            } else {
+                whoBar.className = "bg-emerald-500 h-full transition-all duration-500 rounded-full";
+                whoPercentage.className = "text-emerald-500 font-bold";
+            }
+
+            renderDynamicAlternatives(totalSugar, currentDayList);
+            updateDynamicLoopAnalysis(currentDayList); // 스케줄 변화 시 피로 악순환 루프 스토리 동적 매칭
+        }
+
+        // Custom Simple Toast message box
+        function showSimpleToast(message) {
+            const toast = document.createElement('div');
+            toast.className = "fixed bottom-5 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-xs px-5 py-3 rounded-full shadow-xl font-semibold z-50 transition-opacity duration-300";
+            toast.innerText = message;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = "0";
+                setTimeout(() => toast.remove(), 300);
+            }, 2500);
+        }
+
+        /* -------------------------------------------------------------
+           CHART & SIMULATION LOGIC (Continuous Staggered Curve Model)
+        ------------------------------------------------------------- */
+        function initChart() {
+            if (spikeChart) {
+                spikeChart.destroy();
+            }
+
+            const ctx = document.getElementById('spikeChart').getContext('2d');
+            
+            spikeChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: TIME_LABELS,
+                    datasets: [
+                        {
+                            label: '나의 실제 가상 혈당 (mg/dL)',
+                            data: Array(TIME_LABELS.length).fill(null),
+                            borderColor: '#f43f5e',
+                            backgroundColor: 'rgba(244, 63, 94, 0.08)',
+                            borderWidth: 3,
+                            pointBackgroundColor: '#f43f5e',
+                            pointRadius: 4,
+                            tension: 0.45,
+                            fill: true,
+                            spanGaps: true
+                        },
+                        {
+                            label: '이상적인 완만한 혈당 범위',
+                            data: [80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80],
+                            borderColor: '#10b981',
+                            backgroundColor: 'transparent',
+                            borderWidth: 2,
+                            borderDash: [5, 5],
+                            pointRadius: 0,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: {
+                                font: {
+                                    family: 'Pretendard',
+                                    size: 11,
+                                    weight: 'bold'
+                                },
+                                boxWidth: 12
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return ` ${context.dataset.label}: ${context.raw} mg/dL`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            min: 50,
+                            max: 220,
+                            ticks: {
+                                stepSize: 20,
+                                font: { family: 'Pretendard', size: 10 }
+                            },
+                            grid: { color: '#f1f5f9' },
+                            title: {
+                                display: true,
+                                text: '혈당 수치 (mg/dL)',
+                                font: { family: 'Pretendard', size: 10, weight: 'bold' }
+                            }
+                        },
+                        x: {
+                            grid: { display: false },
+                            ticks: { font: { family: 'Pretendard', size: 10 } }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Generate blood sugar values over time
+        function generateCurveData() {
+            const baseline = 80;
+            const curve = Array(TIME_LABELS.length).fill(baseline);
+            const currentDayList = dailyDatabase[currentTargetDate] || [];
+            
+            for (let i = 0; i < TIME_LABELS.length; i++) {
+                const currentHour = 8 + i; 
+                let activeSpikeSum = 0;
+                let activeCrashSum = 0;
+
+                currentDayList.forEach(drink => {
+                    const drinkDecimalTime = drink.hour + (drink.minute / 60);
+                    const delta = currentHour - drinkDecimalTime; 
+
+                    if (delta >= 0 && delta <= 4.5) {
+                        const spikeWeight = Math.exp(-Math.pow(delta - 0.75, 2) / 0.45);
+                        activeSpikeSum += Math.min(drink.sugar * 2.2, 90) * Math.max(0, spikeWeight);
+
+                        const crashWeight = Math.exp(-Math.pow(delta - 2.0, 2) / 0.35);
+                        activeCrashSum += Math.min(drink.sugar * 0.7, 28) * Math.max(0, crashWeight);
+                    }
+                });
+
+                let hourGlucose = baseline + activeSpikeSum - activeCrashSum;
+                curve[i] = Math.round(Math.max(55, Math.min(hourGlucose, 230)));
+            }
+
+            return curve;
+        }
+
+        // Active Simulation Play Loop
+        function startSimulation() {
+            const currentDayList = dailyDatabase[currentTargetDate] || [];
+
+            if (currentDayList.length === 0) {
+                showSimpleToast("섭취한 음료가 없어서 비교군 기준 정상 시뮬레이션으로 진행합니다.");
+            }
+
+            if (isSimulating) {
+                stopSimulation();
+            }
+
+            isSimulating = true;
+            document.getElementById('chart-placeholder').classList.add('hidden');
+            document.getElementById('sim-btn').innerHTML = `<i class="fa-solid fa-spinner animate-spin"></i> 하루 예측 중...`;
+            document.getElementById('sim-btn').classList.remove('bg-rose-500', 'hover:bg-rose-600');
+            document.getElementById('sim-btn').classList.add('bg-slate-400');
+
+            const curveValues = generateCurveData();
+            initChart();
+
+            let currentIndex = 0;
+            const warningOverlay = document.getElementById('warning-overlay');
+            const warningTitle = document.getElementById('warning-title');
+            const warningDesc = document.getElementById('warning-desc');
+
+            warningOverlay.classList.add('hidden');
+
+            simInterval = setInterval(() => {
+                if (currentIndex >= TIME_LABELS.length) {
+                    stopSimulation();
+                    showSimpleToast("하루 혈당 예측 모델 연산이 완료되었습니다.");
+                    return;
+                }
+
+                spikeChart.data.datasets[0].data[currentIndex] = curveValues[currentIndex];
+                spikeChart.update('none');
+
+                const currentVal = curveValues[currentIndex];
+                const currentHourLabel = TIME_LABELS[currentIndex];
+
+                if (currentVal >= 140) {
+                    warningTitle.innerText = `🚨 [${currentHourLabel}] 급격한 혈당 스파이크 돌입! (${currentVal} mg/dL)`;
+                    warningDesc.innerText = `가당 음료 섭취 영향으로 췌장이 혈당을 낮추기 위해 인슐린 호르몬을 혹사하며 발사하고 있습니다!`;
+                    warningOverlay.classList.remove('hidden');
+                } else if (currentVal <= 70) {
+                    warningTitle.innerText = `💤 [${currentHourLabel}] 저혈당 슈가 크래쉬 구간! (${currentVal} mg/dL)`;
+                    warningDesc.innerText = `과분비된 인슐린의 반작용으로 혈당이 급락해 식곤증, 집중력 하락, 가짜 배고픔이 일어나는 피로 악순환 구간입니다!`;
+                    warningOverlay.classList.remove('hidden');
+                } else {
+                    warningOverlay.classList.add('hidden');
+                }
+
+                currentIndex++;
+            }, 600);
+        }
+
+        // Safe Reset interface states
+        function stopSimulation() {
+            if (simInterval) {
+                clearInterval(simInterval);
+                simInterval = null;
+            }
+            isSimulating = false;
+            document.getElementById('sim-btn').innerHTML = `<i class="fa-solid fa-play"></i> 마시기 시뮬레이션`;
+            document.getElementById('sim-btn').classList.remove('bg-slate-400');
+            document.getElementById('sim-btn').classList.add('bg-rose-500', 'hover:bg-rose-600');
+            document.getElementById('warning-overlay').classList.add('hidden');
+        }
+
+        /* -------------------------------------------------------------
+           ✨ GEMINI API INTEGRATION & ERROR HANDLING WITH BACKOFF
+        ------------------------------------------------------------- */
+        const apiKey = ""; // Runtime provides the key
+
+        // Exponential backoff logic for Gemini API retries
+        async function fetchWithExponentialBackoff(url, options, maxRetries = 5) {
+            let delay = 1000; // start with 1s
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (response.ok) {
+                        return await response.json();
+                    }
+                    if (response.status === 429 || response.status >= 500) {
+                        throw new Error(`Server returned ${response.status}`);
+                    }
+                    const errorDetails = await response.text();
+                    throw new Error(errorDetails);
+                } catch (error) {
+                    if (attempt === maxRetries - 1) {
+                        throw error;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    delay *= 2; // double delay (1s -> 2s -> 4s -> 8s -> 16s)
+                }
+            }
+        }
+
+        // Main AI consultation action
+        async function fetchGeminiAdvice() {
+            const currentDayList = dailyDatabase[currentTargetDate] || [];
+            const responseBox = document.getElementById('ai-response-box');
+            const aiBtn = document.getElementById('ai-btn');
+
+            if (currentDayList.length === 0) {
+                showSimpleToast("선택된 날짜의 가당 음료 섭취 내역이 비어 있어 분석을 시작할 수 없습니다.");
+                return;
+            }
+
+            aiBtn.disabled = true;
+            aiBtn.innerHTML = `<i class="fa-solid fa-spinner animate-spin"></i> 분석 중...`;
+            responseBox.innerHTML = `
+                <div class="flex flex-col items-center justify-center py-10 gap-3">
+                    <div class="flex gap-2">
+                        <span class="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-bounce" style="animation-delay: 0.1s"></span>
+                        <span class="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-bounce" style="animation-delay: 0.2s"></span>
+                        <span class="w-2.5 h-2.5 rounded-full bg-indigo-600 animate-bounce" style="animation-delay: 0.3s"></span>
+                    </div>
+                    <p class="text-xs text-indigo-200 animate-pulse font-bold">글루코스 AI 분석가가 임상 타임라인을 정밀 계산하는 중입니다...</p>
+                </div>
+            `;
+
+            const systemPrompt = "당신은 세계적인 대사 전문의이자 보건 영양 교사입니다. 사용자가 오늘 하루 동안 다른 시간대에 걸쳐 마신 가공 음료수의 타임라인 분석 데이터와 혈당 누적 현황을 바탕으로, 1) 몇 시에 혈당 스파이크 및 저혈당 크래쉬가 발생하여 무기력해질지 생물학적 메커니즘을 짚어 설명해주고, 2) 장기 췌장 피로를 막기 위해 오늘 지켜야 할 맞춤 1:1 보건 솔루션을 친절한 한국어로 제시하십시오. 3) 마지막에 사용자가 마신 특정 음료에 어울리는 천연 무가당 수제 대체 음료 제조법(레시피)을 1개 추천해 주십시오. 모든 답변은 불필요한 서론을 빼고 마크다운 형식을 사용하여 한눈에 읽히도록 깔끔하게 줄바꿈하여 대답하십시오.";
+            const dataString = currentDayList.map(d => `${d.hour}시 ${d.minute}분: ${d.name} (당류 ${d.sugar}g)`).join(', ');
+            const totalSugar = currentDayList.reduce((sum, d) => sum + d.sugar, 0);
+            const userQuery = `선택 일자: ${currentTargetDate}, 총 당류 섭취량: ${totalSugar}g, 섭취 스케줄: [${dataString}]. 이 상태에 대한 장단기 솔루션을 전문적으로 분석해줘.`;
+
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+            const payload = {
+                contents: [{
+                    parts: [{ text: userQuery }]
+                }],
+                systemInstruction: {
+                    parts: [{ text: systemPrompt }]
+                }
+            };
+
+            try {
+                const result = await fetchWithExponentialBackoff(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (!rawText) {
+                    throw new Error("AI의 답변 추출에 실패했습니다.");
+                }
+
+                const formattedHtml = parseMarkdownToHtml(rawText);
+                responseBox.innerHTML = `
+                    <div class="space-y-3 text-slate-100 font-medium">
+                        <div class="flex items-center gap-2 border-b border-white/10 pb-2 mb-3">
+                            <span class="bg-indigo-500 text-white rounded-md px-1.5 py-0.5 text-[10px] font-bold">임상 소견</span>
+                            <span class="text-[11px] text-slate-300">실시간 연쇄 스파이크 분석 완료</span>
+                        </div>
+                        ${formattedHtml}
+                    </div>
+                `;
+
+            } catch (error) {
+                responseBox.innerHTML = `
+                    <div class="text-center py-8 text-rose-300">
+                        <i class="fa-solid fa-circle-exclamation text-3xl mb-2 text-rose-500"></i>
+                        <p class="font-bold text-sm">코칭 분석을 가져오지 못했습니다.</p>
+                        <p class="text-[10px] text-rose-200/70 mt-1">API 서버와의 통신에 장애가 생겼습니다. 잠시 후 다시 시도해 주세요.</p>
+                    </div>
+                `;
+            } finally {
+                aiBtn.disabled = false;
+                aiBtn.innerHTML = `<i class="fa-solid fa-sparkles"></i> ✨ 1:1 보건 솔루션 요청`;
+            }
+        }
+
+        // Tiny utility to render basic markdown headings, list items and strong text securely
+        function parseMarkdownToHtml(text) {
+            let html = text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;");
+
+            // Format bold text
+            html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            
+            // Format headers
+            html = html.replace(/^### (.*?)$/gm, '<h4 class="font-extrabold text-indigo-300 text-sm mt-4 mb-2 flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-indigo-400"></span>$1</h4>');
+            html = html.replace(/^## (.*?)$/gm, '<h3 class="font-black text-indigo-200 text-sm mt-5 mb-2 border-b border-indigo-900 pb-1">$1</h3>');
+            html = html.replace(/^# (.*?)$/gm, '<h2 class="font-black text-white text-base mt-6 mb-3 border-l-4 border-indigo-500 pl-2">$1</h2>');
+
+            // Format lists
+            html = html.replace(/^\* (.*?)$/gm, '<li class="ml-4 list-disc text-slate-300 pl-1 my-1">$1</li>');
+            html = html.replace(/^- (.*?)$/gm, '<li class="ml-4 list-disc text-slate-300 pl-1 my-1">$1</li>');
+            html = html.replace(/^\d+\. (.*?)$/gm, '<li class="ml-4 list-decimal text-slate-300 pl-1 my-1">$1</li>');
+
+            // Replace remaining line breaks
+            html = html.replace(/\n/g, '<br>');
+            
+            return html;
+        }
+    </script>
+</body>
+</html>
